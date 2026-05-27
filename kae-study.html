@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>佳英ちゃん勉強アプリ</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Zen Maru Gothic','Hiragino Marugo ProN',sans-serif;background:#f9a8d4;}
+  @keyframes bob{from{transform:translateY(0)}to{transform:translateY(-10px)}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  @keyframes shk{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px)}40%{transform:translateX(7px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
+  @keyframes bshk{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+  .blink{animation:blink .7s step-end infinite;}
+  .shake{animation:shk .45s ease;}
+  .bshk{animation:bshk .4s ease;}
+  .scroll-area{flex:1;overflow-y:auto;padding-bottom:24px;}
+  .scroll-area::-webkit-scrollbar{width:4px;}
+  .scroll-area::-webkit-scrollbar-thumb{background:rgba(255,255,255,.4);border-radius:4px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const {useState, useEffect} = React;
+
+// ── localStorage ストレージ ──
+const storage = {
+  get: (key) => { const v = localStorage.getItem(key); return v ? {value: v} : null; },
+  set: (key, val) => { localStorage.setItem(key, val); }
+};
+
+const FRAC_KEY = "kae_fraction_try_count";
+const TIME_KEY = "kae_try_count";
+const TOTAL = 10;
+const FONT = "'Zen Maru Gothic','Hiragino Marugo ProN',sans-serif";
+
+// ── ユーティリティ ──
+function gcd(a,b){return b===0?a:gcd(b,a%b);}
+function isReduced(a,b){return gcd(a,b)===1;}
+function getTrueDivisors(a,b){const g=gcd(a,b),d=[];for(let i=2;i<=g;i++)if(g%i===0)d.push(i);return d;}
+function getChoiceDivisors(a,b){
+  const correct=getTrueDivisors(a,b),chosen=new Set(correct),pool=[];
+  for(let d=2;d<=13;d++)if(!chosen.has(d)&&!(a%d===0&&b%d===0))pool.push(d);
+  pool.sort(()=>Math.random()-.5);
+  for(const d of pool){if(chosen.size>=6)break;chosen.add(d);}
+  return Array.from(chosen).sort((x,y)=>x-y);
+}
+function getFracChoices(cN,cD,pN,pD){
+  const choices=[{n:cN,d:cD}],seen=new Set([`${cN}/${cD}`]);
+  const decoys=[{n:pN-1,d:pD-1},{n:cN+1,d:cD},{n:cN,d:cD+1},{n:cN-1,d:cD},{n:cN,d:cD-1},{n:cN+1,d:cD+1},{n:cN*2,d:cD*2},{n:pN,d:pD}];
+  for(const dec of decoys){
+    if(choices.length>=4)break;
+    const{n,d}=dec,key=`${n}/${d}`;
+    if(n>0&&d>0&&n!==d&&!seen.has(key)){choices.push({n,d});seen.add(key);}
+  }
+  let t=0;
+  while(choices.length<4&&t++<50){const n=Math.floor(Math.random()*20)+1,d=Math.floor(Math.random()*30)+n+1,key=`${n}/${d}`;if(!seen.has(key)){choices.push({n,d});seen.add(key);}}
+  return choices.sort(()=>Math.random()-.5);
+}
+function shuffleArr(arr){return[...arr].sort(()=>Math.random()-.5);}
+function approxEq(a,b){return Math.abs(a-b)<1e-9;}
+
+// ── 約分問題生成 ──
+function genReduceQ(){
+  const good=[];
+  for(let b=10;b<=100;b++)for(let a=4;a<b;a++)if(getTrueDivisors(a,b).length>=2)good.push([a,b]);
+  const[a,b]=good[Math.floor(Math.random()*good.length)];
+  return{type:"reduce",num:a,den:b,origNum:a,origDen:b};
+}
+const DECIMAL_QS=[
+  {decimal:"0.5",ansNum:1,ansDen:2},{decimal:"0.25",ansNum:1,ansDen:4},
+  {decimal:"0.75",ansNum:3,ansDen:4},{decimal:"1.5",ansNum:3,ansDen:2},
+  {decimal:"0.2",ansNum:1,ansDen:5},{decimal:"0.4",ansNum:2,ansDen:5},
+  {decimal:"0.6",ansNum:3,ansDen:5},{decimal:"0.8",ansNum:4,ansDen:5},
+  {decimal:"1.25",ansNum:5,ansDen:4},{decimal:"0.125",ansNum:1,ansDen:8},
+  {decimal:"2.5",ansNum:5,ansDen:2},
+];
+function genDecimalQ(){
+  const q=shuffleArr(DECIMAL_QS)[0],dec=(q.decimal.split(".")[1]||"").length;
+  const denom=Math.pow(10,dec),numer=Math.round(parseFloat(q.decimal)*denom);
+  return{type:"decimal",decimal:q.decimal,num:numer,den:denom,origNum:numer,origDen:denom};
+}
+function genQ(){const q=Math.random()<0.3?genDecimalQ():genReduceQ();return{...q,id:Date.now()+Math.random()};}
+
+// ── 分数表示 ──
+function Frac({n,d,size="lg",color="#6d28d9",strike=false,highlight=false}){
+  const fs=size==="xl"?"2rem":size==="lg"?"1.5rem":"1rem";
+  return(
+    <span style={{display:"inline-flex",flexDirection:"column",alignItems:"center",lineHeight:1.1,margin:"0 3px",...(highlight?{background:"#e6ffed",borderRadius:10,padding:"2px 8px"}:{})}}>
+      <span style={{fontSize:fs,fontWeight:900,color:highlight?"#15803d":color,textDecoration:strike?"line-through":"none",opacity:strike?0.4:1}}>{n}</span>
+      <span style={{width:"100%",height:"2.5px",background:highlight?"#15803d":strike?"#ccc":color,borderRadius:2,margin:"3px 0"}}/>
+      <span style={{fontSize:fs,fontWeight:900,color:highlight?"#15803d":color,textDecoration:strike?"line-through":"none",opacity:strike?0.4:1}}>{d}</span>
+    </span>
+  );
+}
+
+// ── 名前確認画面 ──
+function IdentityScreen({onAnswer,fracTry,timeTry}){
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#f9a8d4 0%,#c084fc 50%,#818cf8 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+      <div style={{background:"rgba(255,255,255,0.96)",borderRadius:28,padding:"36px 28px",width:"100%",maxWidth:360,textAlign:"center",boxShadow:"0 20px 60px rgba(0,0,0,0.2)"}}>
+        <div style={{fontSize:"3.5rem",marginBottom:12,display:"inline-block",animation:"bob 1.2s ease-in-out infinite alternate"}}>🌸</div>
+        <div style={{fontSize:"1.6rem",fontWeight:900,color:"#7c3aed",marginBottom:6}}>あなたは佳英ちゃん？</div>
+        <div style={{fontSize:".88rem",color:"#999",marginBottom:20}}>練習をはじめる前に教えてね！</div>
+        <div style={{background:"linear-gradient(135deg,#fdf4ff,#ede9fe)",borderRadius:16,padding:"14px 16px",marginBottom:24,textAlign:"left"}}>
+          <div style={{fontSize:".7rem",fontWeight:900,color:"#9333ea",letterSpacing:".06em",marginBottom:10}}>📊 佳英ちゃんの実施回数</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:".88rem",fontWeight:700,color:"#5b21b6"}}>✂️ 約分れんしゅう</span>
+              <span style={{fontWeight:900,color:"#7c3aed",fontSize:"1.1rem"}}>{fracTry} <span style={{fontSize:".75rem",color:"#aaa",fontWeight:700}}>回</span></span>
+            </div>
+            <div style={{height:1,background:"#e9d5ff"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:".88rem",fontWeight:700,color:"#5a3e8f"}}>⏱️ 時間・速さクイズ</span>
+              <span style={{fontWeight:900,color:"#7c3aed",fontSize:"1.1rem"}}>{timeTry} <span style={{fontSize:".75rem",color:"#aaa",fontWeight:700}}>回</span></span>
+            </div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:12}}>
+          <button onClick={()=>onAnswer(true)} style={{flex:1,padding:16,border:"none",borderRadius:16,fontSize:"1.1rem",fontWeight:900,cursor:"pointer",fontFamily:FONT,background:"linear-gradient(135deg,#f472b6,#c084fc)",color:"white"}}>はい！</button>
+          <button onClick={()=>onAnswer(false)} style={{flex:1,padding:16,border:"none",borderRadius:16,fontSize:"1.1rem",fontWeight:900,cursor:"pointer",fontFamily:FONT,background:"#f3f4f6",color:"#888"}}>ちがう</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 時間クイズデータ ──
+const CAT_COLORS={
+  "秒 → 分":{bg:"#dbeafe",color:"#1d4ed8"},"分 → 秒":{bg:"#fef9c3",color:"#92400e"},
+  "分 → 時間":{bg:"#dcfce7",color:"#15803d"},"時間 → 分":{bg:"#fce7f3",color:"#9d174d"},
+  "分速 → 秒速":{bg:"#ede9fe",color:"#5b21b6"},"秒速 → 分速":{bg:"#ffedd5",color:"#c2410c"},
+  "分速 → 時速":{bg:"#cffafe",color:"#0e7490"},"時速 → 分速":{bg:"#f0fdf4",color:"#166534"},
+};
+function formatVal(val,fracMap){
+  if(fracMap&&fracMap[val]){const dec=parseFloat(val.toFixed(4));if(Number.isInteger(dec))return`${dec}`;return`${dec}\n（${fracMap[val]}）`;}
+  return String(parseFloat(val.toFixed(4)));
+}
+const ALL_TIME_QS=[
+  {cat:"秒 → 分",q:"20秒は何分？",answer:1/3,choices:[1/6,1/4,1/3,1/2],fracMap:{[1/6]:"1/6",[1/4]:"1/4",[1/3]:"1/3",[1/2]:"1/2"},displayAnswer:"1/3分（約0.33分）",explanation:"秒 → 分 は ÷60\n20 ÷ 60 = 1/3（約0.33）"},
+  {cat:"秒 → 分",q:"15秒は何分？",answer:0.25,choices:[0.1,0.2,0.25,0.5],fracMap:{0.25:"1/4",0.5:"1/2"},displayAnswer:"0.25分（= 1/4分）",explanation:"秒 → 分 は ÷60\n15 ÷ 60 = 0.25（= 1/4）"},
+  {cat:"秒 → 分",q:"30秒は何分？",answer:0.5,choices:[0.2,0.25,0.5,0.75],fracMap:{0.25:"1/4",0.5:"1/2",0.75:"3/4"},displayAnswer:"0.5分（= 1/2分）",explanation:"秒 → 分 は ÷60\n30 ÷ 60 = 0.5（= 1/2）"},
+  {cat:"秒 → 分",q:"45秒は何分？",answer:0.75,choices:[0.25,0.5,0.75,1.5],fracMap:{0.25:"1/4",0.5:"1/2",0.75:"3/4"},displayAnswer:"0.75分（= 3/4分）",explanation:"秒 → 分 は ÷60\n45 ÷ 60 = 0.75（= 3/4）"},
+  {cat:"秒 → 分",q:"40秒は何分？",answer:2/3,choices:[1/3,0.5,2/3,0.75],fracMap:{[1/3]:"1/3",[2/3]:"2/3",0.5:"1/2",0.75:"3/4"},displayAnswer:"2/3分（約0.67分）",explanation:"秒 → 分 は ÷60\n40 ÷ 60 = 2/3（約0.67）"},
+  {cat:"秒 → 分",q:"12秒は何分？",answer:0.2,choices:[0.1,0.2,0.25,0.5],fracMap:{0.2:"1/5",0.25:"1/4"},displayAnswer:"0.2分（= 1/5分）",explanation:"秒 → 分 は ÷60\n12 ÷ 60 = 0.2（= 1/5）"},
+  {cat:"秒 → 分",q:"90秒は何分？",answer:1.5,choices:[0.9,1.25,1.5,2],fracMap:{1.5:"3/2"},displayAnswer:"1.5分（= 3/2分）",explanation:"秒 → 分 は ÷60\n90 ÷ 60 = 1.5（= 3/2）"},
+  {cat:"分 → 秒",q:"1/2分は何秒？",answer:30,choices:[15,20,30,45],fracMap:{},displayAnswer:"30秒",explanation:"分 → 秒 は ×60\n1/2 × 60 = 30"},
+  {cat:"分 → 秒",q:"1/4分は何秒？",answer:15,choices:[10,12,15,20],fracMap:{},displayAnswer:"15秒",explanation:"分 → 秒 は ×60\n1/4 × 60 = 15"},
+  {cat:"分 → 秒",q:"1/3分は何秒？",answer:20,choices:[15,20,30,40],fracMap:{},displayAnswer:"20秒",explanation:"分 → 秒 は ×60\n1/3 × 60 = 20"},
+  {cat:"分 → 秒",q:"3/4分は何秒？",answer:45,choices:[30,40,45,50],fracMap:{},displayAnswer:"45秒",explanation:"分 → 秒 は ×60\n3/4 × 60 = 45"},
+  {cat:"分 → 時間",q:"15分は何時間？",answer:0.25,choices:[0.1,0.2,0.25,0.5],fracMap:{0.25:"1/4",0.5:"1/2"},displayAnswer:"0.25時間（= 1/4）",explanation:"分 → 時間 は ÷60\n15 ÷ 60 = 0.25（= 1/4）"},
+  {cat:"分 → 時間",q:"20分は何時間？",answer:1/3,choices:[0.25,1/3,0.5,2/3],fracMap:{0.25:"1/4",[1/3]:"1/3",0.5:"1/2",[2/3]:"2/3"},displayAnswer:"1/3時間（約0.33）",explanation:"分 → 時間 は ÷60\n20 ÷ 60 = 1/3（約0.33）"},
+  {cat:"分 → 時間",q:"30分は何時間？",answer:0.5,choices:[0.25,1/3,0.5,0.75],fracMap:{0.25:"1/4",[1/3]:"1/3",0.5:"1/2",0.75:"3/4"},displayAnswer:"0.5時間（= 1/2）",explanation:"分 → 時間 は ÷60\n30 ÷ 60 = 0.5（= 1/2）"},
+  {cat:"分 → 時間",q:"45分は何時間？",answer:0.75,choices:[0.5,2/3,0.75,1],fracMap:{0.5:"1/2",[2/3]:"2/3",0.75:"3/4"},displayAnswer:"0.75時間（= 3/4）",explanation:"分 → 時間 は ÷60\n45 ÷ 60 = 0.75（= 3/4）"},
+  {cat:"時間 → 分",q:"1/2時間は何分？",answer:30,choices:[20,25,30,45],fracMap:{},displayAnswer:"30分",explanation:"時間 → 分 は ×60\n1/2 × 60 = 30"},
+  {cat:"時間 → 分",q:"1/4時間は何分？",answer:15,choices:[10,12,15,20],fracMap:{},displayAnswer:"15分",explanation:"時間 → 分 は ×60\n1/4 × 60 = 15"},
+  {cat:"時間 → 分",q:"1/3時間は何分？",answer:20,choices:[15,20,25,30],fracMap:{},displayAnswer:"20分",explanation:"時間 → 分 は ×60\n1/3 × 60 = 20"},
+  {cat:"分速 → 秒速",q:"分速 30m は秒速何m？",answer:0.5,choices:[0.25,0.5,0.75,1],fracMap:{0.25:"1/4",0.5:"1/2",0.75:"3/4"},displayAnswer:"秒速 0.5m（= 1/2）",explanation:"分速 → 秒速 は ÷60\n30 ÷ 60 = 0.5（= 1/2）"},
+  {cat:"分速 → 秒速",q:"分速 45m は秒速何m？",answer:0.75,choices:[0.5,0.75,1,1.5],fracMap:{0.5:"1/2",0.75:"3/4"},displayAnswer:"秒速 0.75m（= 3/4）",explanation:"分速 → 秒速 は ÷60\n45 ÷ 60 = 0.75（= 3/4）"},
+  {cat:"秒速 → 分速",q:"秒速 1/4m は分速何m？",answer:15,choices:[10,12,15,20],fracMap:{},displayAnswer:"分速 15m",explanation:"秒速 → 分速 は ×60\n1/4 × 60 = 15"},
+  {cat:"分速 → 時速",q:"分速 500m は時速何km？",answer:30,choices:[5,30,50,300],fracMap:{},displayAnswer:"時速 30km",explanation:"分速(m) → 時速(km) は ×60÷1000\n500 × 60 ÷ 1000 = 30"},
+  {cat:"分速 → 時速",q:"分速 100m は時速何km？",answer:6,choices:[1,6,10,60],fracMap:{},displayAnswer:"時速 6km",explanation:"分速(m) → 時速(km) は ×60÷1000\n100 × 60 ÷ 1000 = 6"},
+  {cat:"時速 → 分速",q:"時速 6km は分速何m？",answer:100,choices:[10,60,100,600],fracMap:{},displayAnswer:"分速 100m",explanation:"時速(km) → 分速(m) は ×1000÷60\n6 × 1000 ÷ 60 = 100"},
+  {cat:"時速 → 分速",q:"時速 9km は分速何m？",answer:150,choices:[15,90,150,900],fracMap:{},displayAnswer:"分速 150m",explanation:"時速(km) → 分速(m) は ×1000÷60\n9 × 1000 ÷ 60 = 150"},
+];
+
+// ── 解き方表示 ──
+function ExplanationBox({explanation}){
+  const lines=explanation.split("\n");
+  return(
+    <div style={{background:"#faf5ff",border:"2px solid #d8b4fe",borderRadius:14,padding:"11px 13px",marginBottom:10}}>
+      <div style={{fontSize:".7rem",fontWeight:900,color:"#7c3aed",letterSpacing:".08em",marginBottom:6}}>💡 解き方</div>
+      <div style={{fontSize:".92rem",fontWeight:700,color:"#3a2660",lineHeight:1.9,whiteSpace:"pre-wrap"}}>
+        {lines.map((line,i)=>{
+          if(i===lines.length-1){
+            return <div key={i}>{line.split(/(=\s*[\d./（）と\s]+)/).map((p,j)=>/^=/.test(p)?<span key={j} style={{color:"#15803d",fontWeight:900}}>{p}</span>:p)}</div>;
+          }
+          return <div key={i}>{line.split(/(÷\d+|×\d+)/g).map((p,j)=>/^[÷×]\d+$/.test(p)?<span key={j} style={{display:"inline-block",background:"#ede9fe",color:"#6d28d9",borderRadius:6,padding:"1px 6px",fontSize:".88rem",fontWeight:900,margin:"0 2px"}}>{p}</span>:p)}</div>;
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── 時間クイズ ──
+function TimeQuiz({identity}){
+  const[timeTry,setTimeTry]=useState(0);
+  const[questions,setQuestions]=useState(()=>shuffleArr(ALL_TIME_QS).slice(0,10).map(q=>({...q,sc:shuffleArr(q.choices)})));
+  const[current,setCurrent]=useState(0);
+  const[selected,setSelected]=useState(null);
+  const[result,setResult]=useState(null);
+  const[score,setScore]=useState(0);
+  const[finished,setFinished]=useState(false);
+  const[emoji,setEmoji]=useState("");
+  const[started,setStarted]=useState(false);
+
+  useEffect(()=>{const r=storage.get(TIME_KEY);if(r)setTimeTry(parseInt(r.value,10)||0);},[]);
+
+  const EQC=["🎉","✨","🌟","🎊","👏","🥳"],EQW=["😅","💪","🤔","😄"];
+  const q=questions[current],total=questions.length,pct=Math.round((score/total)*100);
+
+  const handleStart=()=>{
+    setStarted(true);
+    if(identity){const n=timeTry+1;setTimeTry(n);storage.set(TIME_KEY,String(n));}
+  };
+  const handleSelect=(val)=>{
+    if(result)return;
+    setSelected(val);
+    const ok=approxEq(val,q.answer);
+    setResult(ok?"correct":"wrong");
+    if(ok){setScore(s=>s+1);setEmoji(EQC[Math.floor(Math.random()*EQC.length)]);}
+    else{setEmoji(EQW[Math.floor(Math.random()*EQW.length)]);}
+  };
+  const handleNext=()=>{if(current+1>=total){setFinished(true);return;}setCurrent(c=>c+1);setSelected(null);setResult(null);};
+  const handleRestart=()=>{setQuestions(shuffleArr(ALL_TIME_QS).slice(0,10).map(q=>({...q,sc:shuffleArr(q.choices)})));setCurrent(0);setSelected(null);setResult(null);setScore(0);setFinished(false);setStarted(false);};
+
+  const cStyle=(val)=>{
+    const isA=approxEq(val,q.answer),isS=selected!==null&&approxEq(val,selected);
+    const base={width:"100%",padding:"10px 6px",border:"2.5px solid",borderRadius:14,fontSize:"1rem",fontWeight:800,cursor:result?"default":"pointer",transition:"all .15s",background:"white",fontFamily:FONT,lineHeight:1.4,whiteSpace:"pre-wrap",minHeight:60,display:"flex",alignItems:"center",justifyContent:"center"};
+    if(!result)return{...base,borderColor:"#c9b6f0",color:"#3a2660"};
+    if(isA)return{...base,borderColor:"#22c55e",background:"#e6ffed",color:"#15803d"};
+    if(isS)return{...base,borderColor:"#f97316",background:"#fff3e0",color:"#c2410c"};
+    return{...base,borderColor:"#e5e7eb",color:"#ccc"};
+  };
+
+  const badge=(n)=><span style={{display:"inline-flex",alignItems:"center",gap:4,background:"linear-gradient(135deg,#fce7f3,#ede9fe)",border:"1.5px solid #d8b4fe",borderRadius:999,padding:"3px 12px",fontSize:".74rem",fontWeight:900,color:"#7c3aed"}}>{n}</span>;
+
+  return(
+    <div style={{background:"rgba(255,255,255,.97)",borderRadius:24,padding:"18px",boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
+      <div style={{textAlign:"center",fontSize:"1.2rem",fontWeight:900,color:"#5a3e8f",marginBottom:8}}>⏱️ 時間・速さ変換クイズ</div>
+      {!started?(
+        <div style={{textAlign:"center",padding:"8px 0"}}>
+          {identity&&<div style={{marginBottom:10}}>{badge(`🌸 佳英ちゃん　時間クイズ通算 ${timeTry} 回！`)}</div>}
+          <p style={{fontSize:".9rem",color:"#888",marginBottom:16}}>約分の次は時間・速さ変換に挑戦！</p>
+          <button onClick={handleStart} style={{padding:"13px 32px",border:"none",borderRadius:16,fontSize:"1rem",fontWeight:900,cursor:"pointer",fontFamily:FONT,background:"linear-gradient(135deg,#764ba2,#f093fb)",color:"white"}}>スタート 🚀</button>
+        </div>
+      ):!finished?(
+        <>
+          {identity&&<div style={{textAlign:"center",marginBottom:6}}>{badge(`🌸 チャレンジ ${timeTry} 回目！`)}</div>}
+          <div style={{textAlign:"right",fontSize:".8rem",color:"#aaa",fontWeight:700}}>{current+1} / {total}</div>
+          <div style={{height:8,background:"#e8dfff",borderRadius:999,overflow:"hidden",margin:"4px 0 14px"}}>
+            <div style={{height:"100%",width:`${((current+1)/total)*100}%`,background:"linear-gradient(90deg,#764ba2,#f093fb)",borderRadius:999,transition:"width .4s"}}/>
+          </div>
+          <div style={{background:"linear-gradient(135deg,#f3e8ff,#e0e8ff)",borderRadius:18,padding:"16px",textAlign:"center",fontSize:"1.1rem",fontWeight:700,color:"#3a2660",marginBottom:12,minHeight:78,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <div style={{width:"100%"}}>
+              {(()=>{const c=CAT_COLORS[q.cat]||{bg:"#f3f4f6",color:"#374151"};return<div style={{display:"inline-block",fontSize:".68rem",fontWeight:900,padding:"3px 10px",borderRadius:999,marginBottom:8,background:c.bg,color:c.color}}>{q.cat}</div>;})()}
+              <div>{q.q}</div>
+            </div>
+          </div>
+          {result&&(
+            <div style={{textAlign:"center",fontSize:".92rem",fontWeight:900,padding:"10px 12px",borderRadius:12,marginBottom:10,background:result==="correct"?"#e6ffed":"#fff3e0",color:result==="correct"?"#15803d":"#c2410c",border:`2px solid ${result==="correct"?"#86efac":"#fdba74"}`}}>
+              {emoji} {result==="correct"?`正解！答えは ${q.displayAnswer} だよ！`:`おしい！正解は ${q.displayAnswer} だよ`}
+            </div>
+          )}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:10}}>
+            {q.sc.map((val,i)=>(
+              <button key={i} style={cStyle(val)} onClick={()=>handleSelect(val)} disabled={!!result}>
+                {formatVal(val,q.fracMap)}{result&&approxEq(val,q.answer)?" ✓":""}
+              </button>
+            ))}
+          </div>
+          {result&&<ExplanationBox explanation={q.explanation}/>}
+          {result&&(
+            <button onClick={handleNext} style={{width:"100%",padding:13,border:"none",borderRadius:16,fontSize:"1rem",fontWeight:900,cursor:"pointer",fontFamily:FONT,background:"linear-gradient(135deg,#f093fb,#f5576c)",color:"white"}}>
+              {current+1>=total?"結果を見る 🎊":"つぎへ →"}
+            </button>
+          )}
+        </>
+      ):(
+        <div style={{textAlign:"center",padding:"8px 0"}}>
+          <div style={{width:100,height:100,borderRadius:"50%",background:"linear-gradient(135deg,#764ba2,#f093fb)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",boxShadow:"0 8px 28px rgba(118,75,162,.4)"}}>
+            <div style={{fontSize:"1.8rem",fontWeight:900,color:"white",lineHeight:1}}>{score}</div>
+            <div style={{fontSize:".74rem",color:"rgba(255,255,255,.85)",fontWeight:700}}>/ {total} 問</div>
+          </div>
+          <div style={{fontSize:"1.3rem",fontWeight:900,color:"#3a2660",marginBottom:5}}>{pct===100?"🏆 満点！":"🌟 よくできました！"}</div>
+          <div style={{fontSize:".88rem",color:"#777",marginBottom:18}}>{total}問中 {score}問 正解（{pct}%）</div>
+          <button onClick={handleRestart} style={{width:"100%",padding:13,border:"none",borderRadius:16,fontSize:"1rem",fontWeight:900,cursor:"pointer",fontFamily:FONT,background:"linear-gradient(135deg,#764ba2,#667eea)",color:"white"}}>もう一回やる 🔄</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── メインアプリ ──
+function App(){
+  const[identity,setIdentity]=useState(null);
+  const[tryCount,setTryCount]=useState(0);
+  const[timeTryInit,setTimeTryInit]=useState(0);
+  const[activeTab,setActiveTab]=useState("frac");
+  const[q,setQ]=useState(genQ);
+  const[history,setHistory]=useState([]);
+  const[curN,setCurN]=useState(null);
+  const[curD,setCurD]=useState(null);
+  const[phase,setPhase]=useState("divisor");
+  const[pendingDiv,setPendingDiv]=useState(null);
+  const[fracChoices,setFracChoices]=useState([]);
+  const[wrongFrac,setWrongFrac]=useState(null);
+  const[wrongDiv,setWrongDiv]=useState(false);
+  const[qNum,setQNum]=useState(1);
+  const[correct,setCorrect]=useState(0);
+  const[finished,setFinished]=useState(false);
+  const[typed,setTyped]=useState("");
+  const[typing,setTyping]=useState(true);
+
+  const currentN=curN??q.origNum,currentD=curD??q.origDen;
+
+  useEffect(()=>{
+    const r1=storage.get(FRAC_KEY);if(r1)setTryCount(parseInt(r1.value,10)||0);
+    const r2=storage.get(TIME_KEY);if(r2)setTimeTryInit(parseInt(r2.value,10)||0);
+  },[]);
+
+  useEffect(()=>{
+    const full=q.type==="decimal"?`${q.decimal}  ＝`:`${q.origNum}  ÷  ${q.origDen}  ＝`;
+    setTyped("");setTyping(true);let i=0;
+    const t=setInterval(()=>{i++;setTyped(full.slice(0,i));if(i>=full.length){clearInterval(t);setTyping(false);}},120);
+    return()=>clearInterval(t);
+  },[q.id]);
+
+  const handleIdentity=(isKae)=>{
+    setIdentity(isKae);
+    if(isKae){const n=tryCount+1;setTryCount(n);storage.set(FRAC_KEY,String(n));}
+  };
+
+  const allDivChoices=getChoiceDivisors(currentN,currentD);
+  const steps=[{n:q.origNum,d:q.origDen},...history.map(h=>({n:h.n,d:h.d}))];
+
+  const handleDivisor=(d)=>{
+    if(phase!=="divisor")return;
+    if(currentN%d!==0||currentD%d!==0){setWrongDiv(true);setTimeout(()=>setWrongDiv(false),500);return;}
+    setPendingDiv(d);setFracChoices(getFracChoices(currentN/d,currentD/d,currentN,currentD));setPhase("fraction");
+  };
+  const handleFracChoice=(n,d)=>{
+    if(phase!=="fraction")return;
+    const cN=currentN/pendingDiv,cD=currentD/pendingDiv;
+    if(n===cN&&d===cD){
+      setHistory(h=>[...h,{divisor:pendingDiv,n:cN,d:cD}]);setCurN(cN);setCurD(cD);setWrongFrac(null);
+      if(isReduced(cN,cD)){setPhase("done");setCorrect(c=>c+1);}else{setPhase("divisor");setPendingDiv(null);}
+    }else{setWrongFrac(`${n}/${d}`);setTimeout(()=>setWrongFrac(null),700);}
+  };
+  const advanceQ=()=>{
+    if(qNum>=TOTAL){setFinished(true);return;}
+    const nq=genQ();setQ(nq);setHistory([]);setCurN(null);setCurD(null);
+    setPhase("divisor");setPendingDiv(null);setFracChoices([]);setQNum(n=>n+1);setWrongFrac(null);setWrongDiv(false);
+  };
+  const handleRestart=()=>{
+    const nq=genQ();setQ(nq);setHistory([]);setCurN(null);setCurD(null);
+    setPhase("divisor");setPendingDiv(null);setFracChoices([]);
+    setQNum(1);setCorrect(0);setFinished(false);setIdentity(null);
+  };
+
+  if(identity===null)return<IdentityScreen onAnswer={handleIdentity} fracTry={tryCount} timeTry={timeTryInit}/>;
+
+  const pct=Math.round((correct/TOTAL)*100);
+  const badge=(txt)=><span style={{display:"inline-flex",alignItems:"center",gap:4,background:"linear-gradient(135deg,#fce7f3,#ede9fe)",border:"1.5px solid #d8b4fe",borderRadius:999,padding:"3px 12px",fontSize:".74rem",fontWeight:900,color:"#7c3aed"}}>{txt}</span>;
+
+  const tabBtn=(key,label,ac)=>(
+    <button onClick={()=>setActiveTab(key)} style={{flex:1,padding:"11px 8px",border:"none",borderRadius:14,fontSize:".9rem",fontWeight:900,cursor:"pointer",fontFamily:FONT,transition:"all .2s",background:activeTab===key?"white":"rgba(255,255,255,.25)",color:activeTab===key?ac:"rgba(255,255,255,.85)",boxShadow:activeTab===key?"0 4px 16px rgba(0,0,0,.12)":"none"}}>{label}</button>
+  );
+
+  return(
+    <div style={{height:"100vh",background:"linear-gradient(135deg,#f9a8d4 0%,#c084fc 50%,#818cf8 100%)",display:"flex",flexDirection:"column",alignItems:"center",padding:"16px 16px 0",overflow:"hidden"}}>
+      {/* タブ */}
+      <div style={{display:"flex",gap:8,width:"100%",maxWidth:460,marginBottom:12,flexShrink:0}}>
+        {tabBtn("frac","✂️ 約分れんしゅう","#6d28d9")}
+        {tabBtn("time","⏱️ 時間・速さ","#5a3e8f")}
+      </div>
+
+      {/* スクロールエリア */}
+      <div className="scroll-area" style={{width:"100%",maxWidth:460}}>
+
+        {/* 約分カード */}
+        {activeTab==="frac"&&(
+        <div style={{background:"rgba(255,255,255,.97)",borderRadius:24,padding:"18px",boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
+          <div style={{textAlign:"center",fontSize:"1.2rem",fontWeight:900,color:"#6d28d9",marginBottom:4}}>✂️ 分数・約分れんしゅう</div>
+          {identity&&<div style={{textAlign:"center",margin:"4px 0 8px"}}>{badge(`🌸 佳英ちゃん　チャレンジ ${tryCount} 回目！`)}</div>}
+          {!finished?(
+            <>
+              <div style={{textAlign:"right",fontSize:".78rem",color:"#aaa",fontWeight:700}}>{qNum} / {TOTAL}</div>
+              <div style={{height:7,background:"#ede9fe",borderRadius:999,overflow:"hidden",margin:"3px 0 12px"}}>
+                <div style={{height:"100%",width:`${(qNum/TOTAL)*100}%`,background:"linear-gradient(90deg,#c084fc,#818cf8)",borderRadius:999,transition:"width .4s"}}/>
+              </div>
+              {/* 問題ボックス */}
+              <div style={{background:"linear-gradient(135deg,#fdf4ff,#ede9fe)",borderRadius:16,padding:"12px 10px",textAlign:"center",marginBottom:10}}>
+                <div style={{marginBottom:6}}>
+                  <span style={{display:"inline-block",fontSize:".65rem",fontWeight:900,padding:"2px 9px",borderRadius:999,background:q.type==="decimal"?"#fce7f3":"#ede9fe",color:q.type==="decimal"?"#9d174d":"#5b21b6"}}>
+                    {q.type==="decimal"?"🔢 小数 → 分数":"✂️ 約分"}
+                  </span>
+                </div>
+                <div style={{fontSize:"1.2rem",fontWeight:900,color:"#7c3aed",marginBottom:8,minHeight:"1.8rem",letterSpacing:".05em"}}>
+                  {typed}{typing&&<span className="blink">|</span>}
+                </div>
+                {!typing&&(
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4,flexWrap:"wrap"}}>
+                    {steps.map((s,i)=>{
+                      const isLast=i===steps.length-1,isFin=phase==="done"&&isLast;
+                      return(
+                        <span key={i} style={{display:"inline-flex",alignItems:"center",gap:3}}>
+                          {i>0&&<span style={{color:"#c084fc",fontWeight:900,fontSize:".9rem"}}> ÷{history[i-1].divisor}→</span>}
+                          <Frac n={s.n} d={s.d} color="#6d28d9" strike={!isLast&&phase!=="done"} highlight={isFin}/>
+                        </span>
+                      );
+                    })}
+                    {phase==="fraction"&&pendingDiv&&(
+                      <span style={{display:"inline-flex",alignItems:"center",gap:3,opacity:.45}}>
+                        <span style={{color:"#c084fc",fontWeight:900,fontSize:".9rem"}}> ÷{pendingDiv}→</span>
+                        <Frac n="?" d="?" color="#9333ea"/>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+              {/* STEP1 約数 */}
+              {!typing&&phase==="divisor"&&(
+                <>
+                  <div style={{fontSize:".7rem",fontWeight:900,color:"#9333ea",letterSpacing:".06em",marginBottom:7,textAlign:"center"}}>{q.type==="decimal"?"💡 分子・分母を同じ数で割ろう！":"💡 どの数で割れる？"}</div>
+                  <div className={wrongDiv?"shake":""} style={{display:"flex",flexWrap:"wrap",gap:7,justifyContent:"center",marginBottom:10}}>
+                    {allDivChoices.map(d=><button key={d} onClick={()=>handleDivisor(d)} style={{padding:"9px 16px",border:"2.5px solid #c084fc",borderRadius:12,background:"white",color:"#6d28d9",fontSize:"1rem",fontWeight:900,cursor:"pointer",fontFamily:FONT}}>÷ {d}</button>)}
+                  </div>
+                </>
+              )}
+              {/* STEP2 分数 */}
+              {!typing&&phase==="fraction"&&(
+                <>
+                  <div style={{background:"#fdf4ff",border:"2px solid #d8b4fe",borderRadius:12,padding:"8px 12px",textAlign:"center",marginBottom:8}}>
+                    <span style={{fontSize:".8rem",fontWeight:800,color:"#7c3aed"}}>÷{pendingDiv} したら？</span>
+                  </div>
+                  <div style={{fontSize:".7rem",fontWeight:900,color:"#9333ea",letterSpacing:".06em",marginBottom:7,textAlign:"center"}}>📐 答えの分数を選ぼう！</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:10}}>
+                    {fracChoices.map((fc,i)=>(
+                      <button key={i} className={wrongFrac===`${fc.n}/${fc.d}`?"bshk":""} onClick={()=>handleFracChoice(fc.n,fc.d)}
+                        style={{padding:"12px 6px",border:`2.5px solid ${wrongFrac===`${fc.n}/${fc.d}`?"#f97316":"#c084fc"}`,borderRadius:14,background:wrongFrac===`${fc.n}/${fc.d}`?"#fff3e0":"white",cursor:"pointer",fontFamily:FONT,display:"flex",alignItems:"center",justifyContent:"center",minHeight:64}}>
+                        <Frac n={fc.n} d={fc.d} size="lg" color="#6d28d9"/>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              {/* 完了 */}
+              {phase==="done"&&(
+                <div style={{background:"#f0fdf4",border:"2px solid #86efac",borderRadius:14,padding:"12px",textAlign:"center",marginBottom:10}}>
+                  <div style={{fontSize:"1rem",fontWeight:900,color:"#15803d",marginBottom:5}}>🎉 既約分数になったよ！</div>
+                  <div style={{fontSize:".86rem",color:"#555",lineHeight:1.7}}>
+                    {q.type==="decimal"?<>{q.decimal} ＝ <strong style={{color:"#15803d"}}>{currentN}/{currentD}</strong></>:<>{q.origNum} ÷ {q.origDen} ＝ <strong style={{color:"#15803d"}}>{currentN}/{currentD}</strong></>}
+                    <br/>（最大公約数は {gcd(q.origNum,q.origDen)}）
+                  </div>
+                </div>
+              )}
+              {phase==="done"&&<button onClick={advanceQ} style={{width:"100%",padding:12,border:"none",borderRadius:14,fontSize:"1rem",fontWeight:900,cursor:"pointer",fontFamily:FONT,background:"linear-gradient(135deg,#c084fc,#818cf8)",color:"white"}}>{qNum>=TOTAL?"結果を見る 🎊":"つぎの問題 →"}</button>}
+            </>
+          ):(
+            <>
+              {identity&&<div style={{textAlign:"center",margin:"4px 0 8px"}}>{badge(`🌸 通算 ${tryCount} 回チャレンジ！`)}</div>}
+              <div style={{width:100,height:100,borderRadius:"50%",background:"linear-gradient(135deg,#f472b6,#c084fc)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",margin:"10px auto 16px",boxShadow:"0 8px 28px rgba(196,72,250,.35)"}}>
+                <div style={{fontSize:"1.8rem",fontWeight:900,color:"white",lineHeight:1}}>{correct}</div>
+                <div style={{fontSize:".72rem",color:"rgba(255,255,255,.85)",fontWeight:700}}>/ {TOTAL} 問</div>
+              </div>
+              <div style={{textAlign:"center",fontSize:"1.2rem",fontWeight:900,color:"#6d28d9",marginBottom:4}}>{pct===100?"🏆 満点！すごい！":pct>=80?"🌟 よくできました！":pct>=60?"😄 がんばったね！":"💪 もう一回！"}</div>
+              <div style={{textAlign:"center",fontSize:".86rem",color:"#777",marginBottom:18}}>{pct===100?"全問クリア！約分マスターだ！":`${TOTAL}問中 ${correct}問 クリア（${pct}%）`}</div>
+              <button onClick={handleRestart} style={{width:"100%",padding:12,border:"none",borderRadius:14,fontSize:"1rem",fontWeight:900,cursor:"pointer",fontFamily:FONT,background:"linear-gradient(135deg,#f472b6,#c084fc)",color:"white"}}>もう一回やる 🔄</button>
+            </>
+          )}
+        </div>
+        )}
+
+        {/* 時間クイズカード */}
+        {activeTab==="time"&&<TimeQuiz identity={identity}/>}
+
+      </div>
+    </div>
+  );
+}
+
+const root=ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>
